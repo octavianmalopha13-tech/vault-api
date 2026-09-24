@@ -32,6 +32,33 @@ struct AppState {
 
 type SharedState = Arc<AppState>;
 
+/*struct AuthedToken(String);
+
+impl FromRequestParts<SharedState> for AuthedToken {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &SharedState,
+    ) -> Result<Self, Self::Rejection> {
+        let auth = parts
+            .headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(ApiError::Unauthorized)?;
+        let token = auth
+            .strip_prefix("Bearer ")
+            .ok_or(ApiError::Unauthorized)?
+            .to_string();
+
+        // Peek — don't hold the lock, just verify
+        if !state.sessions.lock().await.contains_key(&token) {
+            return Err(ApiError::Unauthorized);
+        }
+        Ok(AuthedToken(token))
+    }
+}*/
+
 // ---------- errors ----------
 
 enum ApiError {
@@ -217,6 +244,23 @@ async fn main() {
         vault_path,
         sessions: Mutex::new(HashMap::new()),
     });
+
+    // Background task: prune expired sessions every 60 seconds.
+let prune_state = state.clone();
+tokio::spawn(async move {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    interval.tick().await; // first tick is immediate; skip it
+    loop {
+        interval.tick().await;
+        let mut sessions = prune_state.sessions.lock().await;
+        let before = sessions.len();
+        sessions.retain(|_, s| s.last_used.elapsed() < SESSION_TTL);
+        let after = sessions.len();
+        if before != after {
+            println!("Pruned {} expired session(s)", before - after);
+        }
+    }
+});
 
     let app = Router::new()
         .route("/session", post(create_session).delete(revoke_session))
